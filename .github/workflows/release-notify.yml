@@ -1,281 +1,155 @@
-name: Build PickTV APK
+name: Diagnose PickTV Dependencies
 
 on:
   workflow_dispatch:
-    inputs:
-      build_target:
-        description: "选择需要编译的版本"
-        required: true
-        default: "all"
-        type: choice
-        options:
-          - all
-          - tv
-          - mobile
 
 permissions:
   contents: read
 
 jobs:
-  build_apk:
-    name: Build Android APK
+  diagnose:
+    name: Diagnose Missing Dependencies
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 30
 
     steps:
       - name: Checkout source code
         uses: actions/checkout@v4
 
-      - name: Set up JDK 21
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: "21"
-
-      - name: Set up Python 3.10
-        id: setup_python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.10"
-          cache: pip
-
-      - name: Verify Python 3.10
+      - name: Create dependency report
         shell: bash
         run: |
           set -e
 
-          echo "===== Python commands ====="
-          which python || true
-          which python3 || true
-          which python3.10 || true
+          REPORT="dependency-report.txt"
 
-          echo ""
-          echo "===== Python versions ====="
-          python --version
-          python3 --version
-
-          PYTHON_PATH="$(which python)"
-
-          if command -v python3.10 >/dev/null 2>&1; then
-            PYTHON310_PATH="$(which python3.10)"
-          else
-            PYTHON_BIN_DIR="$(dirname "$PYTHON_PATH")"
-            ln -sf "$PYTHON_PATH" "$PYTHON_BIN_DIR/python3.10"
-            PYTHON310_PATH="$PYTHON_BIN_DIR/python3.10"
-          fi
-
-          echo ""
-          echo "Python 3.10 path: $PYTHON310_PATH"
-          "$PYTHON310_PATH" --version
-
-          echo "PYTHON310_PATH=$PYTHON310_PATH" >> "$GITHUB_ENV"
-          echo "$(dirname "$PYTHON310_PATH")" >> "$GITHUB_PATH"
-
-          python -m pip install --upgrade pip setuptools wheel
-
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Repair Gradle Wrapper
-        shell: bash
-        run: |
-          set -e
-
-          mkdir -p gradle/wrapper
-
-          cat > gradle/wrapper/gradle-wrapper.properties <<'EOF'
-          distributionBase=GRADLE_USER_HOME
-          distributionPath=wrapper/dists
-          distributionUrl=https\://services.gradle.org/distributions/gradle-9.4.1-bin.zip
-          networkTimeout=60000
-          validateDistributionUrl=true
-          zipStoreBase=GRADLE_USER_HOME
-          zipStorePath=wrapper/dists
-          EOF
-
-          chmod +x gradlew
-
-          echo "===== Gradle Wrapper configuration ====="
-          cat gradle/wrapper/gradle-wrapper.properties
-
-      - name: Generate temporary build keystore
-        shell: bash
-        run: |
-          set -e
-
-          rm -f "$GITHUB_WORKSPACE/build-key.jks"
-
-          keytool -genkeypair \
-            -keystore "$GITHUB_WORKSPACE/build-key.jks" \
-            -storepass "android" \
-            -keypass "android" \
-            -alias "androiddebugkey" \
-            -keyalg RSA \
-            -keysize 2048 \
-            -validity 10000 \
-            -dname "CN=PickTV, OU=Build, O=PickTV, L=Chongqing, ST=Chongqing, C=CN"
-
-          test -f "$GITHUB_WORKSPACE/build-key.jks"
-
-          echo "Temporary keystore created successfully."
-
-      - name: Create local.properties
-        shell: bash
-        run: |
-          set -e
-
-          if [ -z "$ANDROID_SDK_ROOT" ]; then
-            echo "ANDROID_SDK_ROOT is empty."
-            exit 1
-          fi
-
-          if [ -z "$PYTHON310_PATH" ]; then
-            echo "PYTHON310_PATH is empty."
-            exit 1
-          fi
-
-          cat > local.properties <<EOF
-          sdk.dir=$ANDROID_SDK_ROOT
-          sdkPath=$ANDROID_SDK_ROOT
-          python.dir=$PYTHON310_PATH
-          pythonPath=$PYTHON310_PATH
-          buildPython=$PYTHON310_PATH
-          storeFile=$GITHUB_WORKSPACE/build-key.jks
-          keyAlias=androiddebugkey
-          keyPassword=android
-          storePassword=android
-          key=androiddebugkey
-          password=android
-          EOF
-
-          echo "===== local.properties ====="
-          sed \
-            -e 's/storePassword=.*/storePassword=***/' \
-            -e 's/keyPassword=.*/keyPassword=***/' \
-            -e 's/password=.*/password=***/' \
-            local.properties
-
-      - name: Install Android SDK packages
-        shell: bash
-        run: |
-          set -e
-
-          yes | sdkmanager --licenses >/dev/null 2>&1 || true
-
-          sdkmanager \
-            "platform-tools" \
-            "platforms;android-36" \
-            "build-tools;36.0.0"
-
-      - name: Show build environment
-        shell: bash
-        run: |
-          echo "===== Java ====="
-          java -version
-
-          echo ""
-          echo "===== Python ====="
-          python --version
-          python3 --version
-          python3.10 --version
-
-          echo ""
-          echo "===== Python location ====="
-          which python
-          which python3
-          which python3.10
-
-          echo ""
-          echo "===== Gradle ====="
-          ./gradlew --version --no-daemon
-
-          echo ""
-          echo "===== Android SDK ====="
-          echo "$ANDROID_SDK_ROOT"
-
-      - name: Build selected Debug APKs
-        shell: bash
-        run: |
-          set -o pipefail
-
-          BUILD_TARGET="${{ github.event.inputs.build_target }}"
-
-          case "$BUILD_TARGET" in
-            tv)
-              GRADLE_TASK="assembleLeanbackArm64_v8aDebug"
-              ;;
-            mobile)
-              GRADLE_TASK="assembleMobileArm64_v8aDebug"
-              ;;
-            all)
-              GRADLE_TASK="assembleLeanbackArm64_v8aDebug assembleMobileArm64_v8aDebug"
-              ;;
-            *)
-              echo "Unknown build target: $BUILD_TARGET"
-              exit 1
-              ;;
-          esac
-
-          echo "Build target: $BUILD_TARGET"
-          echo "Gradle task: $GRADLE_TASK"
-
-          ./gradlew $GRADLE_TASK \
-            --stacktrace \
-            --no-daemon \
-            2>&1 | tee gradle-build.log
-
-      - name: Create concise error report
-        if: failure()
-        shell: bash
-        run: |
           {
-            echo "===== FAILURE sections ====="
-            grep -n -A 30 -B 10 \
-              -E "FAILURE:|What went wrong:|Execution failed|Could not|Couldn't find|Caused by:| error:" \
-              gradle-build.log 2>/dev/null || true
-
+            echo "============================================================"
+            echo "PickTV dependency diagnostic report"
+            echo "Repository: $GITHUB_REPOSITORY"
+            echo "Commit: $GITHUB_SHA"
+            echo "============================================================"
             echo ""
-            echo "===== Last 200 lines ====="
-            tail -n 200 gradle-build.log 2>/dev/null || true
-          } > build-error-summary.txt
 
-      - name: List generated APKs
-        if: always()
-        shell: bash
-        run: |
-          echo "===== Generated APK files ====="
+            echo "===== 1. Root directory ====="
+            ls -la
+            echo ""
 
-          find . \
-            -type f \
-            -name "*.apk" \
-            -path "*/build/outputs/apk/*" \
-            -print \
-            -exec ls -lh {} \; || true
+            echo "===== 2. settings.gradle ====="
+            if [ -f settings.gradle ]; then
+              nl -ba settings.gradle
+            else
+              echo "settings.gradle does not exist"
+            fi
+            echo ""
 
-      - name: Upload APK files
-        if: success()
+            echo "===== 3. Root build.gradle ====="
+            if [ -f build.gradle ]; then
+              nl -ba build.gradle
+            else
+              echo "build.gradle does not exist"
+            fi
+            echo ""
+
+            echo "===== 4. app/build.gradle ====="
+            if [ -f app/build.gradle ]; then
+              nl -ba app/build.gradle
+            else
+              echo "app/build.gradle does not exist"
+            fi
+            echo ""
+
+            echo "===== 5. gradle/libs.versions.toml ====="
+            if [ -f gradle/libs.versions.toml ]; then
+              nl -ba gradle/libs.versions.toml
+            else
+              echo "gradle/libs.versions.toml does not exist"
+            fi
+            echo ""
+
+            echo "===== 6. Hook directory structure ====="
+            if [ -d hook ]; then
+              find hook -type f -print | sort
+            else
+              echo "hook directory does not exist"
+            fi
+            echo ""
+
+            echo "===== 7. Hook Java and Kotlin declarations ====="
+            if [ -d hook ]; then
+              grep -RIn \
+                --include="*.java" \
+                --include="*.kt" \
+                -E "package com\.fongmi\.hook|class Hook|interface Hook|object Hook" \
+                hook 2>/dev/null || true
+            fi
+            echo ""
+
+            echo "===== 8. Media3 dependency declarations ====="
+            grep -RIn \
+              --include="*.gradle" \
+              --include="*.gradle.kts" \
+              --include="*.toml" \
+              --include="*.properties" \
+              -E "media3|exoplayer|danmaku|project.*hook|libs\.hook|com\.fongmi\.hook" \
+              . \
+              --exclude-dir=".git" \
+              --exclude-dir="build" \
+              2>/dev/null || true
+            echo ""
+
+            echo "===== 9. Local AAR and JAR files ====="
+            find . \
+              -type f \
+              \( -name "*.aar" -o -name "*.jar" \) \
+              -not -path "*/build/*" \
+              -not -path "*/.git/*" \
+              -print \
+              -exec ls -lh {} \; \
+              2>/dev/null | sort || true
+            echo ""
+
+            echo "===== 10. Git submodule configuration ====="
+            if [ -f .gitmodules ]; then
+              cat .gitmodules
+            else
+              echo ".gitmodules does not exist"
+            fi
+            echo ""
+
+            echo "===== 11. Empty directories ====="
+            find . \
+              -type d \
+              -empty \
+              -not -path "*/.git/*" \
+              -print \
+              2>/dev/null | sort || true
+            echo ""
+
+            echo "===== 12. Media3 imports in source ====="
+            grep -RIn \
+              --include="*.java" \
+              --include="*.kt" \
+              -E "import androidx\.media3|import com\.fongmi\.hook" \
+              app \
+              2>/dev/null || true
+            echo ""
+
+            echo "===== 13. Git ignored files ====="
+            if [ -f .gitignore ]; then
+              cat .gitignore
+            else
+              echo ".gitignore does not exist"
+            fi
+
+          } > "$REPORT"
+
+          cat "$REPORT"
+
+      - name: Upload dependency report
         uses: actions/upload-artifact@v4
         with:
-          name: PickTV-debug-apks
-          path: |
-            **/build/outputs/apk/**/*.apk
+          name: PickTV-dependency-report
+          path: dependency-report.txt
           if-no-files-found: error
-          retention-days: 30
-
-      - name: Upload build error reports
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: PickTV-build-error-reports
-          path: |
-            gradle-build.log
-            build-error-summary.txt
-            app/build.gradle
-            build.gradle
-            settings.gradle
-            gradle/libs.versions.toml
-            gradle/wrapper/gradle-wrapper.properties
-            **/build/reports/**
-            **/build/outputs/logs/**
-          if-no-files-found: ignore
           retention-days: 7

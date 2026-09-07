@@ -33,7 +33,7 @@ jobs:
           echo "Root directory files:"
           ls -la
 
-          echo "Gradle directory:"
+          echo "Gradle directory files:"
           find gradle -maxdepth 3 -type f -print 2>/dev/null || true
 
       - name: Repair Gradle Wrapper configuration
@@ -43,19 +43,15 @@ jobs:
 
           mkdir -p gradle/wrapper
 
-          if [ ! -f "gradle/wrapper/gradle-wrapper.properties" ]; then
-            echo "gradle-wrapper.properties is missing. Creating it now."
-
-            cat > gradle/wrapper/gradle-wrapper.properties <<'EOF'
+          cat > gradle/wrapper/gradle-wrapper.properties <<'EOF'
           distributionBase=GRADLE_USER_HOME
           distributionPath=wrapper/dists
-          distributionUrl=https\://services.gradle.org/distributions/gradle-8.11.1-bin.zip
-          networkTimeout=10000
+          distributionUrl=https\://services.gradle.org/distributions/gradle-9.4.1-bin.zip
+          networkTimeout=60000
           validateDistributionUrl=true
           zipStoreBase=GRADLE_USER_HOME
           zipStorePath=wrapper/dists
           EOF
-          fi
 
           echo "Gradle Wrapper configuration:"
           cat gradle/wrapper/gradle-wrapper.properties
@@ -65,9 +61,6 @@ jobs:
 
       - name: Show Gradle information
         run: ./gradlew --version --no-daemon
-
-      - name: Show available Android tasks
-        run: ./gradlew tasks --all --no-daemon
 
       - name: Build all Debug APKs
         run: |

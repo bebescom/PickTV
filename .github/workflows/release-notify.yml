@@ -10,7 +10,7 @@ jobs:
   build_apk:
     name: Build Android APK
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
 
     steps:
       - name: Checkout source code
@@ -21,27 +21,73 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
-          cache: gradle
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+
+      - name: Check project structure
+        run: |
+          echo "Current directory:"
+          pwd
+
+          echo "Root directory files:"
+          ls -la
+
+          echo "Gradle directory:"
+          find gradle -maxdepth 3 -type f -print 2>/dev/null || true
+
+      - name: Repair Gradle Wrapper configuration
+        shell: bash
+        run: |
+          set -e
+
+          mkdir -p gradle/wrapper
+
+          if [ ! -f "gradle/wrapper/gradle-wrapper.properties" ]; then
+            echo "gradle-wrapper.properties is missing. Creating it now."
+
+            cat > gradle/wrapper/gradle-wrapper.properties <<'EOF'
+          distributionBase=GRADLE_USER_HOME
+          distributionPath=wrapper/dists
+          distributionUrl=https\://services.gradle.org/distributions/gradle-8.11.1-bin.zip
+          networkTimeout=10000
+          validateDistributionUrl=true
+          zipStoreBase=GRADLE_USER_HOME
+          zipStorePath=wrapper/dists
+          EOF
+          fi
+
+          echo "Gradle Wrapper configuration:"
+          cat gradle/wrapper/gradle-wrapper.properties
 
       - name: Grant Gradle permission
         run: chmod +x gradlew
 
       - name: Show Gradle information
-        run: ./gradlew --version
+        run: ./gradlew --version --no-daemon
+
+      - name: Show available Android tasks
+        run: ./gradlew tasks --all --no-daemon
 
       - name: Build all Debug APKs
-        run: ./gradlew assembleDebug --stacktrace --no-daemon
+        run: |
+          ./gradlew assembleDebug \
+            --stacktrace \
+            --no-daemon \
+            --warning-mode all
 
       - name: List generated APKs
         if: always()
         run: |
           echo "Generated APK files:"
-          find . -type f -name "*.apk" -path "*/build/outputs/apk/*" -print || true
+          find . \
+            -type f \
+            -name "*.apk" \
+            -path "*/build/outputs/apk/*" \
+            -print || true
 
       - name: Upload APK files
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: PickTV-debug-apks
@@ -49,3 +95,15 @@ jobs:
             **/build/outputs/apk/**/*.apk
           if-no-files-found: error
           retention-days: 30
+
+      - name: Upload build reports on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: PickTV-build-error-reports
+          path: |
+            **/build/reports/**
+            **/build/outputs/logs/**
+            gradle/wrapper/gradle-wrapper.properties
+          if-no-files-found: ignore
+          retention-days: 7

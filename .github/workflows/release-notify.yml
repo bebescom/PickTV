@@ -10,60 +10,22 @@ jobs:
   build_apk:
     name: Build Android APK
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 120
 
     steps:
       - name: Checkout source code
         uses: actions/checkout@v4
 
-      - name: Set up JDK 17
+      - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "17"
+          java-version: "21"
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Check project structure
-        shell: bash
-        run: |
-          set -e
-
-          echo "Current directory:"
-          pwd
-
-          echo ""
-          echo "Root directory files:"
-          ls -la
-
-          echo ""
-          echo "Gradle directory files:"
-          find gradle -maxdepth 3 -type f -print 2>/dev/null || true
-
-          echo ""
-          echo "Android SDK path:"
-          echo "$ANDROID_SDK_ROOT"
-
-      - name: Create local.properties
-        shell: bash
-        run: |
-          set -e
-
-          if [ -z "$ANDROID_SDK_ROOT" ]; then
-            echo "ANDROID_SDK_ROOT is empty."
-            exit 1
-          fi
-
-          {
-            echo "sdk.dir=$ANDROID_SDK_ROOT"
-            echo "sdkPath=$ANDROID_SDK_ROOT"
-          } > local.properties
-
-          echo "Created local.properties:"
-          cat local.properties
-
-      - name: Repair Gradle Wrapper configuration
+      - name: Repair Gradle Wrapper
         shell: bash
         run: |
           set -e
@@ -80,26 +42,88 @@ jobs:
           zipStorePath=wrapper/dists
           EOF
 
-          echo "Gradle Wrapper configuration:"
+          chmod +x gradlew
+
+          echo "===== gradle-wrapper.properties ====="
           cat gradle/wrapper/gradle-wrapper.properties
 
-      - name: Grant Gradle permission
-        run: chmod +x gradlew
-
-      - name: Show Gradle information
-        run: ./gradlew --version --no-daemon
-
-      - name: Install required Android SDK packages
+      - name: Generate build keystore
         shell: bash
         run: |
           set -e
 
-          yes | sdkmanager --licenses >/dev/null || true
+          rm -f build-key.jks
+
+          keytool -genkeypair \
+            -keystore "$GITHUB_WORKSPACE/build-key.jks" \
+            -storepass "android" \
+            -keypass "android" \
+            -alias "androiddebugkey" \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000 \
+            -dname "CN=PickTV, OU=Build, O=PickTV, L=Chongqing, ST=Chongqing, C=CN"
+
+          test -f "$GITHUB_WORKSPACE/build-key.jks"
+
+          echo "Temporary keystore created."
+
+      - name: Create local.properties
+        shell: bash
+        run: |
+          set -e
+
+          if [ -z "$ANDROID_SDK_ROOT" ]; then
+            echo "ANDROID_SDK_ROOT is empty."
+            exit 1
+          fi
+
+          cat > local.properties <<EOF
+          sdk.dir=$ANDROID_SDK_ROOT
+          sdkPath=$ANDROID_SDK_ROOT
+          storeFile=$GITHUB_WORKSPACE/build-key.jks
+          keyAlias=androiddebugkey
+          keyPassword=android
+          storePassword=android
+          key=androiddebugkey
+          password=android
+          EOF
+
+          echo "===== local.properties keys ====="
+          sed 's/=.*/=***/' local.properties
+
+          echo ""
+          echo "===== Keystore file ====="
+          ls -lh "$GITHUB_WORKSPACE/build-key.jks"
+
+      - name: Install Android SDK packages
+        shell: bash
+        run: |
+          set -e
+
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
 
           sdkmanager \
             "platform-tools" \
             "platforms;android-36" \
             "build-tools;36.0.0"
+
+      - name: Show relevant Gradle configuration
+        shell: bash
+        run: |
+          echo "===== app/build.gradle lines 1-100 ====="
+          nl -ba app/build.gradle | sed -n '1,100p'
+
+          echo ""
+          echo "===== Project files ====="
+          find . -maxdepth 3 -type f \
+            \( -name "*.gradle" -o -name "*.toml" -o -name "*.properties" \) \
+            -print | sort
+
+      - name: Show Gradle information
+        shell: bash
+        run: |
+          ./gradlew --version --no-daemon
 
       - name: Build all Debug APKs
         shell: bash
@@ -116,13 +140,14 @@ jobs:
         if: always()
         shell: bash
         run: |
-          echo "Generated APK files:"
+          echo "===== Generated APK files ====="
 
           find . \
             -type f \
             -name "*.apk" \
             -path "*/build/outputs/apk/*" \
-            -print || true
+            -print \
+            -exec ls -lh {} \; || true
 
       - name: Upload APK files
         if: success()
@@ -134,14 +159,17 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      - name: Upload build logs on failure
+      - name: Upload complete diagnostic files
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: PickTV-build-error-reports
           path: |
             gradle-build.log
-            local.properties
+            app/build.gradle
+            build.gradle
+            settings.gradle
+            gradle/libs.versions.toml
             gradle/wrapper/gradle-wrapper.properties
             **/build/reports/**
             **/build/outputs/logs/**

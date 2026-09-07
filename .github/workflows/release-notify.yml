@@ -26,15 +26,42 @@ jobs:
         uses: android-actions/setup-android@v3
 
       - name: Check project structure
+        shell: bash
         run: |
+          set -e
+
           echo "Current directory:"
           pwd
 
+          echo ""
           echo "Root directory files:"
           ls -la
 
+          echo ""
           echo "Gradle directory files:"
           find gradle -maxdepth 3 -type f -print 2>/dev/null || true
+
+          echo ""
+          echo "Android SDK path:"
+          echo "$ANDROID_SDK_ROOT"
+
+      - name: Create local.properties
+        shell: bash
+        run: |
+          set -e
+
+          if [ -z "$ANDROID_SDK_ROOT" ]; then
+            echo "ANDROID_SDK_ROOT is empty."
+            exit 1
+          fi
+
+          {
+            echo "sdk.dir=$ANDROID_SDK_ROOT"
+            echo "sdkPath=$ANDROID_SDK_ROOT"
+          } > local.properties
+
+          echo "Created local.properties:"
+          cat local.properties
 
       - name: Repair Gradle Wrapper configuration
         shell: bash
@@ -62,17 +89,35 @@ jobs:
       - name: Show Gradle information
         run: ./gradlew --version --no-daemon
 
-      - name: Build all Debug APKs
+      - name: Install required Android SDK packages
+        shell: bash
         run: |
+          set -e
+
+          yes | sdkmanager --licenses >/dev/null || true
+
+          sdkmanager \
+            "platform-tools" \
+            "platforms;android-36" \
+            "build-tools;36.0.0"
+
+      - name: Build all Debug APKs
+        shell: bash
+        run: |
+          set -o pipefail
+
           ./gradlew assembleDebug \
             --stacktrace \
             --no-daemon \
-            --warning-mode all
+            --warning-mode all \
+            2>&1 | tee gradle-build.log
 
       - name: List generated APKs
         if: always()
+        shell: bash
         run: |
           echo "Generated APK files:"
+
           find . \
             -type f \
             -name "*.apk" \
@@ -89,14 +134,16 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      - name: Upload build reports on failure
+      - name: Upload build logs on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: PickTV-build-error-reports
           path: |
+            gradle-build.log
+            local.properties
+            gradle/wrapper/gradle-wrapper.properties
             **/build/reports/**
             **/build/outputs/logs/**
-            gradle/wrapper/gradle-wrapper.properties
           if-no-files-found: ignore
           retention-days: 7
